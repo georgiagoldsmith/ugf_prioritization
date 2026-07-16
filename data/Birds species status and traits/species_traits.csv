@@ -1,0 +1,19 @@
+species,conservation_status,biomass,sensitivity_disturbance,dispersal_ability,growth_rate,rel_abundance,forest_dependency_scaled
+Apalis sharpii,2,8.7,1,8.9,1,85.07480232,1
+Aquila rapax,3,2236.1,0.125,38.7,1,0.563535256,0
+Balearica pavonina,3,3590,0,35.6,1,0.022497748,0
+Ceratogymna atrata,2,1194.8,1,17.5,1,13.95546181,1
+Ceratogymna elata,3,1917,1,19.5,1,65.83295946,1
+Chelictinia riocourii,3,110,0.125,55.7,1,0.009955294,0
+Circaetus beaudouini,3,1500,0.25,43.5,1,1.013021753,0
+Criniger olivaceus,3,28.1,0.75,12.5,1,98.33461175,0.5
+Hylopsar cupreocauda,2,58,0.75,28,1,93.14908958,0.5
+Illadopsis rufescens,2,37,1,7.9,1,91.162124,1
+Malaconotus lagdeni,2,92.3,0.75,8.3,1,89.0840506,0.5
+Merops mentalis,2,22.5,1,24.4,1,54.99353123,1
+Necrosyrtes monachus,5,2043,0.375,38.7,1,1.513586676,0.5
+Parmoptila rubrifrons,2,9.5,0.625,13.9,1,98.67678755,0.5
+Phyllanthus atripennis,3,85.6,0.75,7.4,1,12.6928523,0.5
+Scotopelia ussheri,3,787.2,1,21,1,93.3622278,1
+Stephanoaetus coronatus,2,3640,1,22.1,1,6.135211182,1
+Terathopius ecaudatus,4,2200,0.25,46.8,1,0.627707406,0

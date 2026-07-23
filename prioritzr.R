@@ -8,7 +8,6 @@ library(prioritizr)
 # Load data
 protected_areas <- st_read(here("data/protected areas", "protected_areas_ugf.shp"))
 cocoa_ugf <- rast(here("data/cocoa suitability", "cocoa_ugf.tif"))
-bird_priority_raster <- rast(here("outputs/bird_priority_raster.tif"))
 urban <- rast(here("data/LC/urban_ugf.tif"))
 cropland_ugf <- rast(here("data/LC/cropland_ugf.tif"))
 ugf_boundary <- st_read(here("data/UGF_gp.shp", "UGF_gp.shp"))
@@ -40,7 +39,6 @@ cocoa_ugf <- project(cocoa_ugf, cocoa_template_3km, method = "bilinear")
 
 # re-mask at the new resolution for a precise boundary trace (the 9.6km
 # mask's edges are too coarse to be accurate once upsampled to 3km)
-ugf_boundary_rast <- rasterize(ugf_vect_3857, cocoa_ugf, field = 1, touches = TRUE)
 cocoa_ugf <- mask(cocoa_ugf, ugf_vect_3857, touches = TRUE)
 
 # check cocoa raster
@@ -51,14 +49,8 @@ png(here("outputs/cocoa_suitability.png"), width = 2000, height = 1200, res = 15
 plot(cocoa_ugf)
 dev.off()
 
-# check priority raster
-print(bird_priority_raster)
-
 # check protected areas
 print(protected_areas)
-
-# reproject bird priority raster to match cocoa
-bird_priority_3km <- project(bird_priority_raster, cocoa_ugf, method = "bilinear")
 
 # rasterize protected areas to match cocoa
 protected_areas_v <- vect(protected_areas)
@@ -72,7 +64,7 @@ protected_areas_rast <- rasterize(protected_areas_v, cocoa_ugf, field = 1, backg
 # reproject and resample urban raster to match cocoa template
 urban_3km <- project(urban, cocoa_ugf, method = "near")
 urban_3km <- mask(urban_3km, ugf_vect_3857, touches = TRUE)
-cropland_3km <- project(cropland_ugf, cocoa_ugf, method = "near")
+cropland_3km <- project(cropland_ugf, cocoa_ugf, method = "average")
 cropland_3km <- mask(cropland_3km, ugf_vect_3857, touches = TRUE)
 
 # check
@@ -88,14 +80,11 @@ dev.off()
 
 # check all match
 ext(cocoa_ugf)
-ext(bird_priority_3km)
 ext(protected_areas_rast)
 
 res(cocoa_ugf)
-res(bird_priority_3km)
 res(protected_areas_rast)
 
-bird_priority_3km <- mask(bird_priority_3km, ugf_vect_3857, touches = TRUE)
 protected_areas_rast <- mask(protected_areas_rast, ugf_vect_3857, touches = TRUE)
 
 # only lock out urban/cropland cells that are NOT already protected
@@ -107,9 +96,8 @@ crop_not_protected <- ifel(protected_areas_rast == 1, NA, cropland_3km)
 locked_out <- ifel(urban_not_protected == 1 | crop_not_protected == 1, 1, 0)
 
 png(here("outputs/data_check.png"), width = 4000, height = 1000, res = 150)
-par(mfrow = c(1, 4))
+par(mfrow = c(1, 3))
 plot(cocoa_ugf, main = "Cocoa Suitability (Cost)")
-plot(bird_priority_3km, main = "Bird Priority (Feature)")
 plot(protected_areas_rast, main = "Protected Areas (Locked In)")
 plot(locked_out, main = "Locked Out (Urban + Cropland)")
 par(mfrow = c(1, 1))
@@ -127,6 +115,12 @@ for (i in 1:nrow(birds_star_t)) {
   if (file.exists(sp_file)) {
     r <- rast(sp_file)
     r_3km <- project(r, cocoa_ugf, method = "near")
+    # raw AOH files are stored as INT4U with NAflag=NaN -- an unsigned integer
+    # type can't represent NaN, so project() overflows new "no data" cells to
+    # 4294967296 (2^32) instead of leaving them NA. Valid AOH data is only
+    # ever exactly 1, so explicitly guard against the overflow here rather
+    # than trusting project()'s own NA handling for this file format.
+    r_3km <- ifel(r_3km == 1, 1, NA)
     r_3km <- mask(r_3km, ugf_vect_3857, touches = TRUE)
     names(r_3km) <- sp
     if (is.null(species_stack)) species_stack <- r_3km
@@ -189,7 +183,7 @@ writeRaster(cocoa_ugf_norm, file.path(env_dir, "costs.tif"), overwrite = TRUE)
 writeRaster(disturbance, file.path(env_dir, "disturbance.tif"), overwrite = TRUE)
 
 ############################
-# Using min_set_objective()
+# p - Using min_set_objective()
 #############################
 
 # get star_t scores in same order as species stack
@@ -294,7 +288,7 @@ eval_target_coverage_summary(p2, s2)
 
 
 ##################################
-# Using min_shortfall_objective()
+# p1 - Using min_shortfall_objective() + downweighting
 #################################
 
 # uniform cost so budget is a literal area cap (min_shortfall's budget is
@@ -361,6 +355,135 @@ cat("% from new selections:", (selected_cells - protected_cells) / total_cells *
 plot(s)
 
 #########################
+# p3 - min shortfall + linear penalties
+
+# uniform cost so budget is a literal area cap (min_shortfall's budget is
+# expressed in "cost units" -- needs cost=1 per cell for it to mean area)
+cost_uniform <- ifel(!is.na(cocoa_ugf), 1, NA)
+
+# get star_t scores in same order as species stack
+weights <- birds_star_t$star_t[match(names(species_stack), birds_star_t$scientific_name)]
+
+#problem
+# flat 30% target for every species -- priority is now handled entirely by
+# add_feature_weights(weights) below, not by varying the target itself
+species_targets_1 <- 0.3
+
+# PAs not locked in and cropland not locked out
+total_cells <- global(!is.na(cocoa_ugf), "sum", na.rm = TRUE)$sum
+budget <- round(total_cells * 0.3)
+p3 <- problem(cost_uniform, features = species_stack_norm) |>
+add_min_shortfall_objective(budget) |>
+  add_relative_targets(species_targets_1) |>
+  add_feature_weights(weights) |>
+  add_linear_penalties(penalty = 0.01, data = cocoa_ugf_norm) |>
+  add_locked_out_constraints(urban_not_protected) |>
+  add_binary_decisions() |>
+  add_gurobi_solver()
+
+s3 <- solve(p3)
+cat("% selected:", global(s3, "sum", na.rm = TRUE)$sum / total_cells * 100, "%\n")
+plot(s3)
+
+# classify: 0 = not selected, 1 = newly selected, 2 = existing protected (selected via lock-in)
+solution_classified <- ifel(s3 == 1 & protected_areas_rast == 1, 2,
+                            ifel(s3 == 1, 1, 0))
+
+png(here("outputs/solution_3_x_pa_x_crop.png"), width = 2000, height = 1200, res = 150)
+
+plot(solution_classified,
+     col = c("grey80", "darkgreen", "lightgreen"),
+     main = "Conservation Prioritization Solution (PAs not locked-in, cropland not locked-out)",
+     legend = FALSE)
+
+legend("bottomleft",
+       legend = c("Not selected", "Newly selected", "Existing protected areas"),
+       fill = c("grey80", "darkgreen", "lightgreen"),
+       cex = 1.2)
+
+dev.off()
+
+eval_target_coverage_summary(p3, s3)
+######################################
+# PAs locked in, cropland not locked out
+total_cells <- global(!is.na(cocoa_ugf), "sum", na.rm = TRUE)$sum
+budget <- round(total_cells * 0.3)
+
+p3a <- problem(cost_uniform, features = species_stack_norm) |>
+  add_min_shortfall_objective(budget) |>
+  add_relative_targets(species_targets_1) |>
+  add_feature_weights(weights) |>
+  add_linear_penalties(penalty = 0.01, data = cocoa_ugf_norm) |>
+  add_locked_out_constraints(urban_not_protected) |>
+  add_locked_in_constraints(protected_areas_rast) |>
+  add_binary_decisions() |>
+  add_gurobi_solver()
+
+s3a <- solve(p3a)
+cat("% selected:", global(s3a, "sum", na.rm = TRUE)$sum / total_cells * 100, "%\n")
+plot(s3a)
+
+# classify: 0 = not selected, 1 = newly selected, 2 = existing protected (selected via lock-in)
+solution_classified <- ifel(s3a == 1 & protected_areas_rast == 1, 2,
+                            ifel(s3a == 1, 1, 0))
+
+png(here("outputs/solution_3_x_crop.png"), width = 2000, height = 1200, res = 150)
+
+plot(solution_classified,
+     col = c("grey80", "darkgreen", "lightgreen"),
+     main = "Conservation Prioritization Solution (PAs locked-in, cropland not locked-out)",
+     legend = FALSE)
+
+legend("bottomleft",
+       legend = c("Not selected", "Newly selected", "Existing protected areas"),
+       fill = c("grey80", "darkgreen", "lightgreen"),
+       cex = 1.2)
+
+dev.off()
+
+eval_target_coverage_summary(p3a, s3a)
+
+
+######################################
+# PAs locked in , cropland locked out
+total_cells <- global(!is.na(cocoa_ugf), "sum", na.rm = TRUE)$sum
+budget <- round(total_cells * 0.3)
+
+p3b <- problem(cost_uniform, features = species_stack_norm) |>
+  add_min_shortfall_objective(budget) |>
+  add_relative_targets(species_targets_1) |>
+  add_feature_weights(weights) |>
+  add_linear_penalties(penalty = 0.01, data = cocoa_ugf_norm) |>
+  add_locked_out_constraints(locked_out) |>
+  add_locked_in_constraints(protected_areas_rast) |>
+  add_binary_decisions() |>
+  add_gurobi_solver()
+
+s3b <- solve(p3b)
+cat("% selected:", global(s3b, "sum", na.rm = TRUE)$sum / total_cells * 100, "%\n")
+plot(s3b)
+
+# classify: 0 = not selected, 1 = newly selected, 2 = existing protected (selected via lock-in)
+solution_classified <- ifel(s3b == 1 & protected_areas_rast == 1, 2,
+                            ifel(s3b == 1, 1, 0))
+
+png(here("outputs/solution_3.png"), width = 2000, height = 1200, res = 150)
+
+plot(solution_classified,
+     col = c("grey80", "darkgreen", "lightgreen"),
+     main = "Conservation Prioritization Solution (PAs locked-in, cropland locked-out)",
+     legend = FALSE)
+
+legend("bottomleft",
+       legend = c("Not selected", "Newly selected", "Existing protected areas"),
+       fill = c("grey80", "darkgreen", "lightgreen"),
+       cex = 1.2)
+
+dev.off()
+
+eval_target_coverage_summary(p3b, s3b)
+
+#########################
 # Mimics Horn et al. scenario 2b (prioritizR_optimisation.Rmd) using UGF data:
 #########################
 
@@ -421,9 +544,48 @@ cat("Available to select:", total_cells - protected_cells - urban_cells, "\n")
 
 
 
+##############################
+# locking in solution 3a and adding 
 
+# lock in p3a's actual solution as the new baseline
+locked_in_3a <- ifel(s3a == 1, 1, 0)
 
+species_targets_2 <- 0.5
 
+# budget = everything already locked in (s3a) + 10% of total area on top
+budget_4 <- round(total_cells * 0.40)
 
+p4 <- problem(cost_uniform, features = species_stack_norm) |>
+  add_min_shortfall_objective(budget_4) |>
+  add_relative_targets(species_targets_2) |>
+  add_feature_weights(weights) |>
+  add_linear_penalties(penalty = 0.01, data = cocoa_ugf_norm) |>
+  add_locked_out_constraints(urban_not_protected) |>
+  add_locked_in_constraints(locked_in_3a) |>
+  add_binary_decisions() |>
+  add_gurobi_solver()
 
+s4 <- solve(p4)
+cat("% selected:", global(s4, "sum", na.rm = TRUE)$sum / total_cells * 100, "%\n")
+plot(s4)
+
+# classify: 0 = not selected, 1 = newly selected, 2 = existing protected (selected via lock-in)
+solution_classified <- ifel(s4 == 1 & protected_areas_rast == 1, 2,
+                            ifel(s4 == 1, 1, 0))
+
+png(here("outputs/solution_4.png"), width = 2000, height = 1200, res = 150)
+
+plot(solution_classified,
+     col = c("grey80", "darkgreen", "lightgreen"),
+     main = "Conservation Prioritization Solution (40% target, PAs locked-in, cropland not locked-out)",
+     legend = FALSE)
+
+legend("bottomleft",
+       legend = c("Not selected", "Newly selected", "Existing protected areas"),
+       fill = c("grey80", "darkgreen", "lightgreen"),
+       cex = 1.2)
+
+dev.off()
+
+eval_target_coverage_summary(p4, s4)
 

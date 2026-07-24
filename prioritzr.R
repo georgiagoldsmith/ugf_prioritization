@@ -528,22 +528,6 @@ dev.off()
 
 writeRaster(s_2b, here("outputs/prioritizr_scenario2b.tif"), overwrite = TRUE)
 
-
-############################
-
-# tests
-urban_cells <- global(urban_not_protected, "sum", na.rm = TRUE)$sum
-
-cat("Total cells:", total_cells, "\n")
-cat("Protected (locked in):", protected_cells, "\n")
-cat("Urban (locked out):", urban_cells, "\n")
-cat("Need to reach 30%:", total_cells * 0.3, "\n")
-cat("Already protected:", protected_cells, "\n")
-cat("Additional cells needed:", total_cells * 0.3 - protected_cells, "\n")
-cat("Available to select:", total_cells - protected_cells - urban_cells, "\n")
-
-
-
 ##############################
 # locking in solution 3a and adding 
 
@@ -588,4 +572,20 @@ legend("bottomleft",
 dev.off()
 
 eval_target_coverage_summary(p4, s4)
+
+
+############################
+
+# tests
+urban_cells <- global(urban_not_protected, "sum", na.rm = TRUE)$sum
+
+cat("Total cells:", total_cells, "\n")
+cat("Protected (locked in):", protected_cells, "\n")
+cat("Urban (locked out):", urban_cells, "\n")
+cat("Need to reach 30%:", total_cells * 0.3, "\n")
+cat("Already protected:", protected_cells, "\n")
+cat("Additional cells needed:", total_cells * 0.3 - protected_cells, "\n")
+cat("Available to select:", total_cells - protected_cells - urban_cells, "\n")
+
+
 

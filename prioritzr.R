@@ -12,6 +12,12 @@ urban <- rast(here("data/LC/urban_ugf.tif"))
 cropland_ugf <- rast(here("data/LC/cropland_ugf.tif"))
 ugf_boundary <- st_read(here("data/UGF_gp.shp", "UGF_gp.shp"))
 ugf_vect_3857 <- vect(st_transform(ugf_boundary, 3857))
+disturbance <- rast(here("captain/disturbance.tif"))
+LC <- rast(here("data/LC/lccs_ugf.tif"))
+tmf1 <- rast(here("data/tmf/JRC_TMF_UndisturbedDegradedForest_v1_1982_2025_AFR_ID52_N10_W10.tif"))
+tmf2 <- rast(here("data/tmf/JRC_TMF_UndisturbedDegradedForest_v1_1982_2025_AFR_ID53_N10_E0.tif"))
+tmf3 <- rast(here("data/tmf/JRC_TMF_UndisturbedDegradedForest_v1_1982_2025_AFR_ID51_N10_W20.tif"))
+tmf4 <- rast(here("data/tmf/JRC_TMF_UndisturbedDegradedForest_v1_1982_2025_AFR_ID70_N20_W20.tif"))
 
 # cocoa_ugf's grid is the template every other layer gets reprojected onto,
 # but it falls slightly short of the true boundary extent on the west and
@@ -61,21 +67,51 @@ protected_areas_v <- vect(protected_areas)
 # at 9.6km resolution). Default center-based rasterization is more accurate.
 protected_areas_rast <- rasterize(protected_areas_v, cocoa_ugf, field = 1, background = 0)
 
-# reproject and resample urban raster to match cocoa template
+# reproject and resample urban & cropland raster to match cocoa template
 urban_3km <- project(urban, cocoa_ugf, method = "near")
 urban_3km <- mask(urban_3km, ugf_vect_3857, touches = TRUE)
 cropland_3km <- project(cropland_ugf, cocoa_ugf, method = "average")
 cropland_3km <- mask(cropland_3km, ugf_vect_3857, touches = TRUE)
+cropland_3km <- ifel(cropland_3km > 0.5, 1, 0)
+plot(cropland_3km)
+
+# reproject and resample tmf
+ugf_vect_4326 <- project(ugf_vect_3857, crs(tmf1))
+buffer_deg <- 0.05
+target_ext <- ext(ugf_vect_4326) + buffer_deg
+
+tmf_join <- merge(tmf1, tmf2, tmf3, tmf4)
+buffer_deg <- 0.05  # ~5.5km at this latitude -- comfortably more than cocoa_ugf's 3km cells
+tmf_cropped <- crop(tmf_join, ext(ugf_vect_4326) + buffer_deg)
+tmf_masked <- mask(tmf_cropped, ugf_vect_4326)
+
+# go straight onto YOUR already-downscaled cocoa_ugf (3km, post gapfill/downscale steps)
+tmf_3km <- project(tmf_masked, cocoa_ugf, method = "average",
+                   filename = "/tmp/tmf_3km.tif", overwrite = TRUE)
+
+file.copy("/tmp/tmf_3km.tif", here("data/tmf/tmf_3km.tif"), overwrite = TRUE)
+
+plot(tmf_3km)
+freq(tmf_3km)              # table of unique values + how many cells have each (best for categorical data like tmf's 0-3 classes)
+
+tmf_undisturbed <- ifel(tmf_3km <= 1.5, 1, 0)
+tmf_undisturbed_not_protected <- ifel(protected_areas_rast == 1, NA, tmf_undisturbed)
+plot(tmf_undisturbed_not_protected)
 
 # check
 plot(urban_3km)
-png(here("outputs/urban_9km.png"), width = 2000, height = 1200, res = 150)
+png(here("outputs/urban_3km.png"), width = 2000, height = 1200, res = 150)
 plot(urban_3km)
 dev.off()
 
 plot(cropland_3km)
-png(here("outputs/cropland_9km.png"), width = 2000, height = 1200, res = 150)
+png(here("outputs/cropland_3km.png"), width = 2000, height = 1200, res = 150)
 plot(cropland_3km)
+dev.off()
+
+plot(tmf_undisturbed)
+png(here("outputs/tmf_undisturbed.png"), width = 2000, height = 1000, res = 150)
+plot(tmf_undisturbed)
 dev.off()
 
 # check all match
@@ -94,6 +130,7 @@ crop_not_protected <- ifel(protected_areas_rast == 1, NA, cropland_3km)
 # add_locked_out_constraints() takes a single layer, so combine urban and
 # cropland into one locked-out mask instead of passing them separately
 locked_out <- ifel(urban_not_protected == 1 | crop_not_protected == 1, 1, 0)
+locked_out_w_tmf <- ifel(urban_not_protected == 1 | crop_not_protected == 1 | tmf_undisturbed_not_protected == 1, 1, 0) 
 
 png(here("outputs/data_check.png"), width = 4000, height = 1000, res = 150)
 par(mfrow = c(1, 3))
@@ -404,6 +441,7 @@ legend("bottomleft",
 dev.off()
 
 eval_target_coverage_summary(p3, s3)
+
 ######################################
 # PAs locked in, cropland not locked out
 total_cells <- global(!is.na(cocoa_ugf), "sum", na.rm = TRUE)$sum
@@ -445,7 +483,22 @@ eval_target_coverage_summary(p3a, s3a)
 
 
 ######################################
+# PAs locked in cropland locked out
+# problem
+# per-species targets
+species_targets_1 <- 0.3
+
 # PAs locked in , cropland locked out
+weights <- birds_star_t$star_t[match(names(species_stack), birds_star_t$scientific_name)]
+
+cost_uniform <- ifel(!is.na(cocoa_ugf), 1, NA)
+
+# require at least 30% of total area selected, as an explicit linear
+# constraint rather than a pseudo-feature with its own relative target
+total_cells <- global(!is.na(cocoa_ugf), "sum", na.rm = TRUE)$sum
+area_threshold <- round(total_cells * 0.3)
+area_layer <- ifel(!is.na(cocoa_ugf), 1, NA)
+
 total_cells <- global(!is.na(cocoa_ugf), "sum", na.rm = TRUE)$sum
 budget <- round(total_cells * 0.3)
 
@@ -467,7 +520,7 @@ plot(s3b)
 solution_classified <- ifel(s3b == 1 & protected_areas_rast == 1, 2,
                             ifel(s3b == 1, 1, 0))
 
-png(here("outputs/solution_3.png"), width = 2000, height = 1200, res = 150)
+png(here("outputs/solution_3_scaled_crop.png"), width = 2000, height = 1200, res = 150)
 
 plot(solution_classified,
      col = c("grey80", "darkgreen", "lightgreen"),
@@ -483,6 +536,136 @@ dev.off()
 
 eval_target_coverage_summary(p3b, s3b)
 
+####################################################
+# PAs locked in cropland locked out undisturbed tmf locked out
+# problem
+# per-species targets
+species_targets_1 <- 0.3
+
+# PAs locked in , cropland locked out
+weights <- birds_star_t$star_t[match(names(species_stack), birds_star_t$scientific_name)]
+
+cost_uniform <- ifel(!is.na(cocoa_ugf), 1, NA)
+
+# require at least 30% of total area selected, as an explicit linear
+# constraint rather than a pseudo-feature with its own relative target
+total_cells <- global(!is.na(cocoa_ugf), "sum", na.rm = TRUE)$sum
+area_threshold <- round(total_cells * 0.3)
+area_layer <- ifel(!is.na(cocoa_ugf), 1, NA)
+
+total_cells <- global(!is.na(cocoa_ugf), "sum", na.rm = TRUE)$sum
+budget <- round(total_cells * 0.3)
+
+p3c <- problem(cost_uniform, features = species_stack_norm) |>
+  add_min_shortfall_objective(budget) |>
+  add_relative_targets(species_targets_1) |>
+  add_feature_weights(weights) |>
+  add_linear_penalties(penalty = 0.01, data = cocoa_ugf_norm) |>
+  add_locked_out_constraints(locked_out_w_tmf) |>
+  add_locked_in_constraints(protected_areas_rast) |>
+  add_binary_decisions() |>
+  add_gurobi_solver()
+
+s3c <- solve(p3c)
+cat("% selected:", global(s3c, "sum", na.rm = TRUE)$sum / total_cells * 100, "%\n")
+plot(s3c)
+
+# classify: 0 = not selected, 1 = newly selected, 2 = existing protected (selected via lock-in)
+solution_classified <- ifel(s3c == 1 & protected_areas_rast == 1, 2,
+                            ifel(s3c == 1, 1, 0))
+
+png(here("outputs/solution_3_no_tmf.png"), width = 2000, height = 1200, res = 150)
+
+plot(solution_classified,
+     col = c("grey80", "darkgreen", "lightgreen"),
+     main = "Conservation Prioritization Solution (PAs locked-in, cropland locked-out, Undisturbed TMF locked-out)",
+     legend = FALSE)
+
+legend("bottomleft",
+       legend = c("Not selected", "Newly selected", "Existing protected areas"),
+       fill = c("grey80", "darkgreen", "lightgreen"),
+       cex = 1.2)
+
+dev.off()
+
+eval_target_coverage_summary(p3c, s3c)
+
+plot(tmf_undisturbed_not_protected)
+plot(tmf_undisturbed)
+
+#########################
+total_cells <- global(!is.na(cocoa_ugf), "sum", na.rm = TRUE)$sum
+area_threshold <- round(total_cells * 0.3)
+area_layer <- ifel(!is.na(cocoa_ugf), 1, NA)
+
+total_cells <- global(!is.na(cocoa_ugf), "sum", na.rm = TRUE)$sum
+budget <- round(total_cells * 0.3)
+
+p3d <- problem(cost_uniform, features = species_stack_norm) |>
+  add_min_shortfall_objective(budget) |>
+  add_relative_targets(species_targets_1) |>
+  add_feature_weights(weights) |>
+  add_linear_penalties(penalty = 0.01, data = cocoa_ugf_norm) |>
+  add_locked_out_constraints(tmf_undisturbed) |>
+  add_binary_decisions() |>
+  add_gurobi_solver()
+
+s3d <- solve(p3d)
+cat("% selected:", global(s3d, "sum", na.rm = TRUE)$sum / total_cells * 100, "%\n")
+plot(s3d)
+
+# classify: 0 = not selected, 1 = newly selected, 2 = existing protected (selected via lock-in)
+solution_classified <- ifel(s3d == 1 & protected_areas_rast == 1, 2,
+                            ifel(s3d == 1, 1, 0))
+
+png(here("outputs/solution_3_no_tmf.png"), width = 2000, height = 1200, res = 150)
+
+plot(solution_classified,
+     col = c("grey80", "darkgreen", "lightgreen"),
+     main = "Conservation Prioritization Solution (Undisturbed TMF locked-out)",
+     legend = FALSE)
+
+legend("bottomleft",
+       legend = c("Not selected", "Newly selected", "Existing protected areas"),
+       fill = c("grey80", "darkgreen", "lightgreen"),
+       cex = 1.2)
+
+dev.off()
+
+eval_target_coverage_summary(p3d, s3d)
+
+#########################
+p3e <- problem(cost_uniform, features = species_stack_norm) |>
+  add_min_shortfall_objective(budget) |>
+  add_relative_targets(species_targets_1) |>
+  add_feature_weights(weights) |>
+  add_binary_decisions() |>
+  add_gurobi_solver()
+
+s3e <- solve(p3e)
+cat("% selected:", global(s3e, "sum", na.rm = TRUE)$sum / total_cells * 100, "%\n")
+plot(s3e)
+
+# classify: 0 = not selected, 1 = newly selected, 2 = existing protected (selected via lock-in)
+solution_classified <- ifel(s3e == 1 & protected_areas_rast == 1, 2,
+                            ifel(s3e == 1, 1, 0))
+
+png(here("outputs/solution_3_no_tmf_no_crop.png"), width = 2000, height = 1200, res = 150)
+
+plot(solution_classified,
+     col = c("grey80", "darkgreen", "lightgreen"),
+     main = "Conservation Prioritization Solution (Nothing locked in or out, no cost)",
+     legend = FALSE)
+
+legend("bottomleft",
+       legend = c("Not selected", "Newly selected", "Existing protected areas"),
+       fill = c("grey80", "darkgreen", "lightgreen"),
+       cex = 1.2)
+
+dev.off()
+
+eval_target_coverage_summary(p3e, s3e)
+plot(cocoa_ugf)
 #########################
 # Mimics Horn et al. scenario 2b (prioritizR_optimisation.Rmd) using UGF data:
 #########################

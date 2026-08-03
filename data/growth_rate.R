@@ -2,11 +2,10 @@ library(readxl)
 library(dplyr)
 library(here)
 
-# --- Adjust these paths to your actual file locations ---
+
 birdlife_file <- here("captain_test/captain2-main/generation_lengths.xlsx") 
 
-# --- Read the Species sheet ---
-# The main species table in BIRDBASE is usually named "Species"
+# The main species table in BIRDBASE
 sp <- read_excel(birdlife_file, sheet = "Generation lengths_v3.1_for_web")
 
 # Inspect available columns first (run once)
@@ -97,7 +96,7 @@ library(dplyr)
 combined <- result %>%
   inner_join(resultbp, by = "species") %>%
   mutate(
-    Gs = (1 / adult_survival)^(1 / generation_length)
+    growth_rate = (1 / adult_survival)^(1 / generation_length)
   )
 
 # Check results

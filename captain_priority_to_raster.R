@@ -25,7 +25,7 @@ cocoa_ugf <- project(cocoa_ugf, cocoa_template_3km, method = "bilinear")
 cocoa_ugf <- mask(cocoa_ugf, ugf_vect_3857, touches = TRUE)
 
 captain_dir <- "/Users/georgiagoldsmith/Documents/Bren/CI-internship/captain/captain2-main/ugf_data"
-priority_csv <- file.path(captain_dir, "predictions_20250507", "ugf_pred_totalarea_pa_cost20250507_priority_grid.csv")
+priority_csv <- file.path(captain_dir, "predictions_20250507", "ugf_pred_totalarea_pa_cost_rndgrowth_bs1520250507_priority_grid.csv")
 
 priority_mat <- as.matrix(read.csv(priority_csv, header = FALSE))
 
@@ -40,12 +40,12 @@ names(captain_priority) <- "captain_priority"
 # shows up correctly, matching how the prioritizr rasters are already masked.
 captain_priority <- mask(captain_priority, cocoa_ugf)
 
-png(here("outputs/captain_priority_cost.png"), width = 2000, height = 1200, res = 150)
-plot(captain_priority, main = "CAPTAIN predicted protection priority (cost reward on)")
+png(here("outputs/captain_priority_bs15.png"), width = 2000, height = 1200, res = 150)
+plot(captain_priority, main = "CAPTAIN predicted protection priority (batch_size=15)")
 dev.off()
 
 writeRaster(captain_priority,
-           file.path(captain_dir, "predictions_20250507", "captain_priority_cost.tif"),
+           file.path(captain_dir, "predictions_20250507", "captain_priority_bs15.tif"),
            overwrite = TRUE)
 
 # classified version, but keeping the actual 0-1 selection-frequency gradient
@@ -65,10 +65,10 @@ gradient_cols <- hcl.colors(6, "YlGnBu", rev = TRUE)
 captain_cols <- c("grey40", gradient_cols)
 captain_breaks <- c(-0.3, -0.1, 0.1, 0.3, 0.5, 0.7, 0.9, 1.1)
 
-png(here("outputs/captain_priority_classified_cost.png"), width = 2000, height = 1200, res = 150)
+png(here("outputs/captain_priority_classified_bs15.png"), width = 2000, height = 1200, res = 150)
 plot(captain_display,
      col = captain_cols,
      breaks = captain_breaks,
-     main = "CAPTAIN Conservation Prioritization Solution (cost reward on)",
+     main = "CAPTAIN Conservation Prioritization Solution (batch_size=15)",
      plg = list(legend = c("Existing protected", "0", "0.2", "0.4", "0.6", "0.8", "1")))
 dev.off()
